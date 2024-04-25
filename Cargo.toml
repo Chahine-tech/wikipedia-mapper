@@ -7,8 +7,5 @@ edition = "2021"
 
 [dependencies]
 reqwest = { version = "0.11", features = ["blocking"] }
-scraper = "0.12.0"
-petgraph = "0.5.1"
-dot = "0.1.4"
-graphviz-rust = "0.9.0"
-anyhow = "1.0.82"
+scraper = "0.12"
+crossbeam = "0.8"

@@ -1,79 +1,61 @@
-use anyhow::Error;
-use dot::Graph;
-use petgraph::Graph as PetGraph;
-use reqwest::blocking::get;
+extern crate crossbeam;
+extern crate reqwest;
+extern crate scraper;
+
+use crossbeam::queue::SegQueue;
 use scraper::{Html, Selector};
-use std::collections::VecDeque;
-use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-fn main() -> Result<(), Error> {
-    let url = "https://fr.wikipedia.org/wiki/Rust_(langage)";
+fn main() {
+    let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+    let queue = Arc::new(SegQueue::new());
+    let visited = Arc::new(Mutex::new(Vec::<String>::new()));
 
-    let mut queue = VecDeque::new();
-    queue.push_back(url.to_string());
+    queue.push(url.to_string());
 
-    let (tx, rx) = channel();
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let queue_clone = Arc::clone(&queue);
+            let visited_clone = Arc::clone(&visited);
 
-    let mut graph = PetGraph::<String, ()>::new();
-
-    while let Some(page_url) = queue.pop_front() {
-        let tx = tx.clone();
-
-        thread::spawn(move || -> Result<(), Error> {
-            let html = get(page_url.clone())?.text()?;
-
-            let document = Html::parse_document(&html);
-            let selector = Selector::parse("a").unwrap();
-            for element in document.select(&selector) {
-                if let Some(link) = element.value().attr("href") {
-                    let link = link.trim();
-                    if link.starts_with("/wiki/") && !link.contains(":") {
-                        let page_url = format!("https://fr.wikipedia.org{}", link);
-                        queue.push_back(page_url.clone());
-                        tx.send(page_url)?;
+            thread::spawn(move || {
+                let mut visited_count = 0;
+                while let Some(current_url) = queue_clone.pop() {
+                    if visited_count >= 10 {
+                        break;
                     }
+                    let body = reqwest::blocking::get(&current_url)
+                        .unwrap()
+                        .text()
+                        .unwrap();
+                    let link_selector = Selector::parse("a").unwrap();
+
+                    let document = Html::parse_document(&body);
+
+                    let mut visited_guard = visited_clone.lock().unwrap();
+
+                    for element in document.select(&link_selector) {
+                        if let Some(href) = element.value().attr("href") {
+                            let href = href.to_string();
+                            if href.starts_with("/wiki/") && !visited_guard.contains(&href) {
+                                let full_url = format!("https://en.wikipedia.org{}", href);
+                                queue_clone.push(full_url);
+                                visited_guard.push(href);
+                            }
+                        }
+                    }
+
+                    visited_count += 1;
+                    drop(visited_guard); // Manually drop visited_guard here
                 }
-            }
+            })
+        })
+        .collect();
 
-            let page_title = document
-                .select(&Selector::parse("h1#firstHeading").unwrap())
-                .next()
-                .unwrap()
-                .text()
-                .collect::<Vec<_>>()
-                .join("");
-            let node_index = graph.add_node(page_title);
-
-            for neighbor in graph.neighbors(node_index) {
-                graph.add_edge(node_index, neighbor, ());
-            }
-
-            Ok(())
-        });
+    for handle in handles {
+        handle.join().unwrap();
     }
 
-    for _ in 0..queue.len() {
-        rx.recv()?;
-    }
-
-    let dot = {
-        let mut g = Graph::new("G");
-        g.set_node_labels(true);
-        g.set_edge_labels(true);
-
-        for node in graph.raw_nodes().iter() {
-            g.add_node(node.weight);
-        }
-
-        for edge in graph.raw_edges().iter() {
-            g.add_edge(edge.source().index(), edge.target().index(), "");
-        }
-
-        Dot::new_digraph(&g)
-    };
-
-    println!("{}", dot);
-
-    Ok(())
+    println!("Visited pages: {:?}", *visited.lock().unwrap());
 }
