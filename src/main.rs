@@ -1,7 +1,3 @@
-extern crate crossbeam;
-extern crate reqwest;
-extern crate scraper;
-
 use crossbeam::queue::SegQueue;
 use scraper::{Html, Selector};
 use std::sync::{Arc, Mutex};
