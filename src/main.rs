@@ -15,7 +15,7 @@ fn main() {
     let visited = Arc::new(Mutex::new(Vec::<String>::new()));
     let stats = Arc::new(Mutex::new(CrawlStats::new()));
 
-    // Charger l'état du crawl si disponible
+    // Load crawl state if available
     if let Ok(state) = load_state() {
         for (url, depth) in state.queue {
             queue.push((url, depth));
@@ -32,7 +32,7 @@ fn main() {
     println!("Visited pages: {:?}", *visited_pages);
     state::save_visited(&visited_pages).expect("Failed to save visited pages");
 
-    // Sauvegarder l'état du crawl
+    // Save crawl state
     let state = state::CrawlState {
         queue: {
             let mut queue_vec = vec![];
@@ -45,7 +45,7 @@ fn main() {
     };
     save_state(&state).expect("Failed to save crawl state");
 
-    // Afficher les statistiques
+    // Show statistics
     let stats_guard = stats.lock().unwrap();
     println!("Crawl statistics: {:?}", *stats_guard);
 }
