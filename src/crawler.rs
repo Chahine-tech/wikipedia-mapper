@@ -5,6 +5,7 @@ use scraper::{Html, Selector};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use std::collections::HashSet;
 use anyhow::{Result, anyhow};
 
 const MAX_DEPTH: usize = 3;
@@ -12,7 +13,7 @@ const RATE_LIMIT: u64 = 200;
 
 pub fn start_crawl(
     queue: &Arc<SegQueue<(String, usize)>>,
-    visited: &Arc<Mutex<Vec<String>>>,
+    visited: &Arc<Mutex<HashSet<String>>>,
     stats: &Arc<Mutex<CrawlStats>>,
 ) -> Result<()> {
     let handles: Vec<_> = (0..4)
@@ -49,7 +50,7 @@ pub fn start_crawl(
                                     if href.starts_with("/wiki/") && !visited_guard.contains(&href) {
                                         let full_url = format!("https://en.wikipedia.org{}", href);
                                         queue_clone.push((full_url.clone(), depth + 1));
-                                        visited_guard.push(full_url.clone());
+                                        visited_guard.insert(full_url.clone());
                                         stats_guard.links_followed += 1;
                                     } else {
                                         stats_guard.links_ignored += 1;

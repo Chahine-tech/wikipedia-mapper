@@ -8,11 +8,13 @@ use crossbeam::queue::SegQueue;
 use state::{load_state, save_state};
 use stats::CrawlStats;
 use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use anyhow::Result;
 
-fn main() {
+fn main() -> Result<()> {
     let start_url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
     let queue = Arc::new(SegQueue::new());
-    let visited = Arc::new(Mutex::new(Vec::<String>::new()));
+    let visited = Arc::new(Mutex::new(HashSet::<String>::new()));
     let stats = Arc::new(Mutex::new(CrawlStats::new()));
 
     // Load crawl state if available
@@ -20,17 +22,19 @@ fn main() {
         for (url, depth) in state.queue {
             queue.push((url, depth));
         }
-        let mut visited_guard = visited.lock().unwrap();
+        let mut visited_guard = visited.lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire visited lock: {}", e))?;
         *visited_guard = state.visited;
     } else {
         queue.push((start_url.to_string(), 0));
     }
 
-    start_crawl(&queue, &visited, &stats).expect("Crawl failed");
+    start_crawl(&queue, &visited, &stats)?;
 
-    let visited_pages = visited.lock().unwrap();
+    let visited_pages = visited.lock()
+        .map_err(|e| anyhow::anyhow!("Failed to acquire visited lock: {}", e))?;
     println!("Visited pages: {:?}", *visited_pages);
-    state::save_visited(&visited_pages).expect("Failed to save visited pages");
+    state::save_visited(&visited_pages)?;
 
     // Save crawl state
     let state = state::CrawlState {
@@ -43,9 +47,12 @@ fn main() {
         },
         visited: visited_pages.clone(),
     };
-    save_state(&state).expect("Failed to save crawl state");
+    save_state(&state)?;
 
     // Show statistics
-    let stats_guard = stats.lock().unwrap();
+    let stats_guard = stats.lock()
+        .map_err(|e| anyhow::anyhow!("Failed to acquire stats lock: {}", e))?;
     println!("Crawl statistics: {:?}", *stats_guard);
+    
+    Ok(())
 }
