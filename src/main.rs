@@ -26,7 +26,7 @@ fn main() {
         queue.push((start_url.to_string(), 0));
     }
 
-    start_crawl(&queue, &visited, &stats);
+    start_crawl(&queue, &visited, &stats).expect("Crawl failed");
 
     let visited_pages = visited.lock().unwrap();
     println!("Visited pages: {:?}", *visited_pages);
