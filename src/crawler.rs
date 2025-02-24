@@ -2,16 +2,18 @@ use crate::stats::CrawlStats;
 use crate::utils::fetch_page;
 use crossbeam::queue::SegQueue;
 use scraper::{Html, Selector};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use std::time::Duration;
 use std::collections::HashSet;
 use anyhow::{Result, anyhow};
+use futures::future::join_all;
+use tokio::time::sleep;
 
 const MAX_DEPTH: usize = 3;
 const RATE_LIMIT: u64 = 200;
-const NUM_THREADS: usize = 4;
-const MAX_PAGES_PER_THREAD: usize = 10;
+const NUM_CONCURRENT_REQUESTS: usize = 10;
+const MAX_PAGES_PER_WORKER: usize = 10;
 
 pub struct Crawler {
     queue: Arc<SegQueue<(String, usize)>>,
@@ -36,19 +38,17 @@ impl Crawler {
         }
     }
 
-    pub fn load_state(&self, state: crate::state::CrawlState) -> Result<()> {
+    pub async fn load_state(&self, state: crate::state::CrawlState) -> Result<()> {
         for (url, depth) in state.queue {
             self.queue.push((url, depth));
         }
-        let mut visited_guard = self.visited.lock()
-            .map_err(|e| anyhow!("Failed to acquire visited lock: {}", e))?;
+        let mut visited_guard = self.visited.lock().await;
         *visited_guard = state.visited;
         Ok(())
     }
 
-    pub fn get_state(&self) -> Result<crate::state::CrawlState> {
-        let visited_guard = self.visited.lock()
-            .map_err(|e| anyhow!("Failed to acquire visited lock: {}", e))?;
+    pub async fn get_state(&self) -> Result<crate::state::CrawlState> {
+        let visited_guard = self.visited.lock().await;
         
         let mut queue_vec = vec![];
         while let Some(item) = self.queue.pop() {
@@ -61,19 +61,17 @@ impl Crawler {
         })
     }
 
-    pub fn get_visited(&self) -> Result<HashSet<String>> {
-        let visited_guard = self.visited.lock()
-            .map_err(|e| anyhow!("Failed to acquire visited lock: {}", e))?;
+    pub async fn get_visited(&self) -> Result<HashSet<String>> {
+        let visited_guard = self.visited.lock().await;
         Ok(visited_guard.clone())
     }
 
-    pub fn get_stats(&self) -> Result<CrawlStats> {
-        let stats_guard = self.stats.lock()
-            .map_err(|e| anyhow!("Failed to acquire stats lock: {}", e))?;
+    pub async fn get_stats(&self) -> Result<CrawlStats> {
+        let stats_guard = self.stats.lock().await;
         Ok(stats_guard.clone())
     }
 
-    fn process_page(
+    async fn process_page(
         queue: &SegQueue<(String, usize)>,
         visited: &mut HashSet<String>,
         stats: &mut CrawlStats,
@@ -84,7 +82,7 @@ impl Crawler {
             return Ok(());
         }
 
-        let body = fetch_page(&url)?;
+        let body = fetch_page(&url).await?;
         let document = Html::parse_document(&body);
         let link_selector = Selector::parse("a")
             .map_err(|e| anyhow!("Failed to parse link selector: {}", e))?;
@@ -107,48 +105,55 @@ impl Crawler {
         Ok(())
     }
 
-    pub fn start_crawl(&self) -> Result<()> {
-        let handles: Vec<_> = (0..NUM_THREADS)
-            .map(|_| {
-                let queue_clone = Arc::clone(&self.queue);
-                let visited_clone = Arc::clone(&self.visited);
-                let stats_clone = Arc::clone(&self.stats);
+    pub async fn start_crawl(&self) -> Result<()> {
+        let mut tasks = Vec::new();
 
-                thread::spawn(move || -> Result<()> {
-                    let mut local_visited_count = 0;
-                    while local_visited_count < MAX_PAGES_PER_THREAD {
-                        let (current_url, depth) = match queue_clone.pop() {
-                            Some((url, depth)) => (url, depth),
-                            None => break,
-                        };
+        for _ in 0..NUM_CONCURRENT_REQUESTS {
+            let queue_clone = Arc::clone(&self.queue);
+            let visited_clone = Arc::clone(&self.visited);
+            let stats_clone = Arc::clone(&self.stats);
 
-                        let mut visited_guard = visited_clone.lock()
-                            .map_err(|e| anyhow!("Failed to acquire visited lock: {}", e))?;
-                        let mut stats_guard = stats_clone.lock()
-                            .map_err(|e| anyhow!("Failed to acquire stats lock: {}", e))?;
+            let task = tokio::spawn(async move {
+                let mut local_visited_count = 0;
+                while local_visited_count < MAX_PAGES_PER_WORKER {
+                    let (current_url, depth) = match queue_clone.pop() {
+                        Some((url, depth)) => (url, depth),
+                        None => break,
+                    };
 
-                        if let Err(e) = Self::process_page(
-                            &queue_clone,
-                            &mut visited_guard,
-                            &mut stats_guard,
-                            current_url.clone(),
-                            depth,
-                        ) {
-                            eprintln!("Failed to process {}: {}", current_url, e);
-                        } else {
-                            local_visited_count += 1;
-                        }
+                    let mut visited_guard = visited_clone.lock().await;
+                    let mut stats_guard = stats_clone.lock().await;
 
-                        thread::sleep(Duration::from_millis(RATE_LIMIT));
+                    if let Err(e) = Self::process_page(
+                        &queue_clone,
+                        &mut visited_guard,
+                        &mut stats_guard,
+                        current_url.clone(),
+                        depth,
+                    ).await {
+                        eprintln!("Failed to process {}: {}", current_url, e);
+                    } else {
+                        local_visited_count += 1;
                     }
-                    Ok(())
-                })
-            })
-            .collect();
 
-        for handle in handles {
-            handle.join()
-                .map_err(|e| anyhow!("Thread panicked: {:?}", e))??;
+                    drop(visited_guard);
+                    drop(stats_guard);
+
+                    sleep(Duration::from_millis(RATE_LIMIT)).await;
+                }
+                Ok::<(), anyhow::Error>(())
+            });
+
+            tasks.push(task);
+        }
+
+        // Attend que toutes les tâches soient terminées
+        for result in join_all(tasks).await {
+            match result {
+                Ok(Ok(())) => (),
+                Ok(Err(e)) => eprintln!("Task error: {}", e),
+                Err(e) => eprintln!("Task panicked: {}", e),
+            }
         }
 
         Ok(())
