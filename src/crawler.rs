@@ -147,7 +147,6 @@ impl Crawler {
             tasks.push(task);
         }
 
-        // Attend que toutes les tâches soient terminées
         for result in join_all(tasks).await {
             match result {
                 Ok(Ok(())) => (),
