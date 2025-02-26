@@ -2,6 +2,7 @@ mod crawler;
 mod state;
 mod stats;
 mod utils;
+mod graph;
 
 use crate::crawler::Crawler;
 use state::load_state;
@@ -22,11 +23,15 @@ async fn main() -> Result<()> {
     // Get and save visited pages
     let visited_pages = crawler.get_visited().await?;
     println!("Visited pages: {:?}", visited_pages);
-    state::save_visited(&visited_pages)?;
 
     // Save crawl state
     let state = crawler.get_state().await?;
     state::save_state(&state)?;
+
+    // Export graph visualization
+    crawler.export_graph("wikipedia_graph.dot", "wikipedia_graph.json").await?;
+    println!("Graph exported to wikipedia_graph.dot and wikipedia_graph.json");
+    println!("To generate a PNG visualization, run: dot -Tpng wikipedia_graph.dot -o wikipedia_graph.png");
 
     // Show statistics
     let stats = crawler.get_stats().await?;

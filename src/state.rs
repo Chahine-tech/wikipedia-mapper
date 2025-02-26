@@ -28,12 +28,12 @@ pub fn load_state() -> Result<CrawlState> {
     Ok(state)
 }
 
-pub fn save_visited(visited: &HashSet<String>) -> Result<()> {
-    let serialized = serde_json::to_string(visited)
-        .context("Failed to serialize visited pages")?;
-    let mut file = File::create("visited_pages.json")
-        .context("Failed to create visited_pages.json")?;
-    file.write_all(serialized.as_bytes())
-        .context("Failed to write visited pages to file")?;
-    Ok(())
-}
+// pub fn save_visited(visited: &HashSet<String>) -> Result<()> {
+//     let serialized = serde_json::to_string(visited)
+//         .context("Failed to serialize visited pages")?;
+//     let mut file = File::create("visited_pages.json")
+//         .context("Failed to create visited_pages.json")?;
+//     file.write_all(serialized.as_bytes())
+//         .context("Failed to write visited pages to file")?;
+//     Ok(())
+// }
