@@ -21,8 +21,7 @@ async fn main() -> Result<()> {
     crawler.start_crawl().await?;
 
     // Get and save visited pages
-    let visited_pages = crawler.get_visited().await?;
-    println!("Visited pages: {:?}", visited_pages);
+    // let visited_pages = crawler.get_visited().await?;
 
     // Save crawl state
     let state = crawler.get_state().await?;
