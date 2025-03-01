@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::time::Duration;
 use std::collections::HashSet;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use futures::future::join_all;
 use tokio::time::sleep;
 
@@ -65,11 +65,6 @@ impl Crawler {
         })
     }
 
-    pub async fn get_visited(&self) -> Result<HashSet<String>> {
-        let visited_guard = self.visited.lock().await;
-        Ok(visited_guard.clone())
-    }
-
     pub async fn get_stats(&self) -> Result<CrawlStats> {
         let stats_guard = self.stats.lock().await;
         Ok(stats_guard.clone())
@@ -94,34 +89,81 @@ impl Crawler {
             return Ok(());
         }
 
-        let body = fetch_page(&url).await?;
-        let document = Html::parse_document(&body);
-        let link_selector = Selector::parse("a")
-            .map_err(|e| anyhow!("Failed to parse link selector: {}", e))?;
+        if !visited.contains(&url) {
+            visited.insert(url.clone());
+            stats.pages_visited += 1;
+        }
 
-        for element in document.select(&link_selector) {
-            if let Some(href) = element.value().attr("href") {
-                let href = href.to_string();
-                if href.starts_with("/wiki/") && !visited.contains(&href) {
-                    let full_url = format!("https://en.wikipedia.org{}", href);
-                    queue.push((full_url.clone(), depth + 1));
-                    visited.insert(full_url.clone());
-                    graph.add_edge(url.clone(), full_url);
-                    stats.links_followed += 1;
-                } else {
-                    stats.links_ignored += 1;
+        let body = match fetch_page(&url).await {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Failed to fetch page {}: {}", url, e);
+                return Ok(());
+            }
+        };
+
+        let document = Html::parse_document(&body);
+        let selectors = [
+            "a[href^='/wiki/']",
+            "#mw-content-text a[href^='/wiki/']",
+            ".mw-parser-output a[href^='/wiki/']",
+            "div.mw-parser-output a[href^='/wiki/']"
+        ];
+
+        let mut local_links_followed = 0;
+        let mut local_links_ignored = 0;
+
+        for selector_str in selectors {
+            if let Ok(link_selector) = Selector::parse(selector_str) {
+                for element in document.select(&link_selector) {
+                    if let Some(href) = element.value().attr("href") {
+                        let href = href.to_string();
+                        
+                        if !href.contains(":") && !href.contains("#") {
+                            let full_url = format!("https://en.wikipedia.org{}", href);
+                            if !visited.contains(&full_url) {
+                                queue.push((full_url.clone(), depth + 1));
+                                graph.add_edge(url.clone(), full_url);
+                                local_links_followed += 1;
+                            }
+                        } else {
+                            local_links_ignored += 1;
+                        }
+                    }
                 }
             }
         }
 
-        stats.pages_visited += 1;
+        stats.links_followed += local_links_followed;
+        stats.links_ignored += local_links_ignored;
+        
         Ok(())
     }
 
     pub async fn start_crawl(&self) -> Result<()> {
         let mut tasks = Vec::new();
 
-        for _ in 0..NUM_CONCURRENT_REQUESTS {
+        {
+            let mut stats_guard = self.stats.lock().await;
+            *stats_guard = CrawlStats::new();
+        }
+
+        if let Some((url, depth)) = self.queue.pop() {
+            let mut visited_guard = self.visited.lock().await;
+            let mut stats_guard = self.stats.lock().await;
+            let mut graph_guard = self.graph.lock().await;
+
+            Self::process_page(
+                &self.queue,
+                &mut visited_guard,
+                &mut stats_guard,
+                &mut graph_guard,
+                url.clone(),
+                depth,
+            ).await?;
+        }
+
+        for _worker_id in 0..NUM_CONCURRENT_REQUESTS {
             let queue_clone = Arc::clone(&self.queue);
             let visited_clone = Arc::clone(&self.visited);
             let stats_clone = Arc::clone(&self.stats);
@@ -135,26 +177,35 @@ impl Crawler {
                         None => break,
                     };
 
-                    let mut visited_guard = visited_clone.lock().await;
-                    let mut stats_guard = stats_clone.lock().await;
-                    let mut graph_guard = graph_clone.lock().await;
+                    let already_visited = {
+                        let visited_guard = visited_clone.lock().await;
+                        visited_guard.contains(&current_url)
+                    };
 
-                    if let Err(e) = Self::process_page(
-                        &queue_clone,
-                        &mut visited_guard,
-                        &mut stats_guard,
-                        &mut graph_guard,
-                        current_url.clone(),
-                        depth,
-                    ).await {
+                    if already_visited {
+                        continue;
+                    }
+
+                    let result = {
+                        let mut visited_guard = visited_clone.lock().await;
+                        let mut stats_guard = stats_clone.lock().await;
+                        let mut graph_guard = graph_clone.lock().await;
+
+                        Self::process_page(
+                            &queue_clone,
+                            &mut visited_guard,
+                            &mut stats_guard,
+                            &mut graph_guard,
+                            current_url.clone(),
+                            depth,
+                        ).await
+                    };
+
+                    if let Err(e) = result {
                         eprintln!("Failed to process {}: {}", current_url, e);
                     } else {
                         local_visited_count += 1;
                     }
-
-                    drop(graph_guard);
-                    drop(visited_guard);
-                    drop(stats_guard);
 
                     sleep(Duration::from_millis(RATE_LIMIT)).await;
                 }
@@ -175,3 +226,4 @@ impl Crawler {
         Ok(())
     }
 }
+
