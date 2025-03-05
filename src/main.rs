@@ -4,9 +4,11 @@ mod stats;
 mod utils;
 mod graph;
 mod pathfinder;
+mod analytics;
 
 use crate::crawler::Crawler;
 use crate::pathfinder::PathFinder;
+use crate::analytics::Analytics;
 use state::load_state;
 use anyhow::Result;
 use std::io::{self, Write};
@@ -35,6 +37,55 @@ async fn main() -> Result<()> {
     // Show statistics
     let stats = crawler.get_stats().await?;
     println!("Crawl statistics: {:?}", stats);
+
+    // After exporting graph and before pathfinder initialization, add:
+    println!("\nCalculating PageRank for all pages...");
+    let graph_data = std::fs::read_to_string("wikipedia_graph.json")?;
+    let graph: serde_json::Value = serde_json::from_str(&graph_data)?;
+    
+    let mut analytics = Analytics::new();
+    if let Some(edges) = graph["edges"].as_array() {
+        let edges: Vec<(String, String)> = edges
+            .iter()
+            .filter_map(|edge| {
+                if let Some(edge_array) = edge.as_array() {
+                    if edge_array.len() >= 2 {
+                        Some((
+                            edge_array[0].as_str()?.to_string(),
+                            edge_array[1].as_str()?.to_string(),
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        println!("Loaded {} edges for PageRank calculation", edges.len());
+        analytics.load_from_edges(edges);
+        
+        match analytics.calculate_pagerank() {
+            Ok(results) => {
+                println!("PageRank calculation completed in {} iterations (converged: {})", 
+                    results.iterations, results.converged);
+                
+                // Sort pages by PageRank score
+                let mut pages: Vec<_> = results.scores.into_iter().collect();
+                pages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                
+                println!("\nTop 10 most important pages:");
+                for (i, (page, score)) in pages.iter().take(10).enumerate() {
+                    let title = page.split('/').last().unwrap_or(page)
+                        .replace('_', " ")
+                        .replace("%20", " ");
+                    println!("{}. {} (score: {:.6})", i + 1, title, score);
+                }
+            }
+            Err(e) => println!("Error calculating PageRank: {}", e),
+        }
+    }
 
     // Initialize pathfinder
     println!("\nInitializing Wikipedia path finder...");
