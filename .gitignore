@@ -1,5 +1,19 @@
 # Rust
 /target
+# Generated files
+crawl_state.json
+wikipedia_graph.dot
+wikipedia_graph.json
+wikipedia_graph.png
+
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/**/*.rs.bk
 Cargo.lock
 
 # Generated files
@@ -8,6 +22,8 @@ wikipedia_graph.json
 crawl_state.json
 visited_pages.json
 *.png
+wikipedia_graph.dot
+wikipedia_graph.png
 
 # IDE
 .idea/
