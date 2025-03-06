@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 const DAMPING_FACTOR: f64 = 0.85;
 const MAX_ITERATIONS: usize = 100;
@@ -34,7 +34,7 @@ impl Analytics {
                 .entry(from.clone())
                 .or_insert_with(Vec::new)
                 .push(to.clone());
-            
+
             self.inbound_links
                 .entry(to)
                 .or_insert_with(Vec::new)
@@ -45,14 +45,14 @@ impl Analytics {
     pub fn calculate_pagerank(&self) -> Result<PageRankResults> {
         let num_pages = self.get_all_pages().len();
         let initial_score = 1.0 / num_pages as f64;
-        
+
         // Initialize scores
         let mut scores: HashMap<String, f64> = self
             .get_all_pages()
             .into_iter()
             .map(|page| (page, initial_score))
             .collect();
-        
+
         let mut iterations = 0;
         let mut converged = false;
 
@@ -63,16 +63,17 @@ impl Analytics {
             // Calculate new score for each page
             for page in self.get_all_pages() {
                 let mut new_score = (1.0 - DAMPING_FACTOR) / num_pages as f64;
-                
+
                 // Sum contributions from pages that link to this page
                 if let Some(incoming) = self.inbound_links.get(&page) {
                     for source in incoming {
                         let source_score = scores.get(source).unwrap_or(&initial_score);
-                        let source_outbound_count = self.outbound_links
+                        let source_outbound_count = self
+                            .outbound_links
                             .get(source)
                             .map(|links| links.len())
                             .unwrap_or(1);
-                        
+
                         new_score += DAMPING_FACTOR * source_score / source_outbound_count as f64;
                     }
                 }
@@ -100,7 +101,9 @@ impl Analytics {
     }
 
     fn get_all_pages(&self) -> Vec<String> {
-        let mut pages: Vec<String> = self.outbound_links.keys()
+        let mut pages: Vec<String> = self
+            .outbound_links
+            .keys()
             .chain(self.inbound_links.keys())
             .cloned()
             .collect();
@@ -108,4 +111,4 @@ impl Analytics {
         pages.dedup();
         pages
     }
-} 
+}

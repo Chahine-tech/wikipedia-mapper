@@ -1,16 +1,16 @@
+mod analytics;
 mod crawler;
+mod graph;
+mod pathfinder;
 mod state;
 mod stats;
 mod utils;
-mod graph;
-mod pathfinder;
-mod analytics;
 
+use crate::analytics::Analytics;
 use crate::crawler::Crawler;
 use crate::pathfinder::PathFinder;
-use crate::analytics::Analytics;
-use state::load_state;
 use anyhow::Result;
+use state::load_state;
 use std::io::{self, Write};
 
 #[tokio::main]
@@ -25,17 +25,41 @@ async fn main() -> Result<()> {
 
     // After creating the crawler
     // Add custom URL filtering rules before starting the crawl
-    crawler.add_custom_url_rule("exclude_years", Box::new(|url| {
-        // Exclude pages that are just years (e.g., /wiki/1999)
-        !url.matches(r"/wiki/\d{4}$").next().is_some()
-    })).await;
+    crawler
+        .add_custom_url_rule(
+            "exclude_years",
+            Box::new(|url| {
+                // Exclude pages that are just years (e.g., /wiki/1999)
+                !url.matches(r"/wiki/\d{4}$").next().is_some()
+            }),
+        )
+        .await;
 
-    crawler.add_custom_url_rule("exclude_dates", Box::new(|url| {
-        // Exclude pages that are dates (e.g., /wiki/January_1)
-        let months = ["January", "February", "March", "April", "May", "June",
-                     "July", "August", "September", "October", "November", "December"];
-        !months.iter().any(|month| url.contains(&format!("/wiki/{}_", month)))
-    })).await;
+    crawler
+        .add_custom_url_rule(
+            "exclude_dates",
+            Box::new(|url| {
+                // Exclude pages that are dates (e.g., /wiki/January_1)
+                let months = [
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                ];
+                !months
+                    .iter()
+                    .any(|month| url.contains(&format!("/wiki/{}_", month)))
+            }),
+        )
+        .await;
 
     // Start the crawl
     crawler.start_crawl().await?;
@@ -52,7 +76,9 @@ async fn main() -> Result<()> {
     state::save_state(&state)?;
 
     // Export graph visualization
-    crawler.export_graph("wikipedia_graph.dot", "wikipedia_graph.json").await?;
+    crawler
+        .export_graph("wikipedia_graph.dot", "wikipedia_graph.json")
+        .await?;
     println!("Graph exported to wikipedia_graph.dot and wikipedia_graph.json");
     println!("To generate a PNG visualization, run: dot -Tpng wikipedia_graph.dot -o wikipedia_graph.png");
 
@@ -64,7 +90,7 @@ async fn main() -> Result<()> {
     println!("\nCalculating PageRank for all pages...");
     let graph_data = std::fs::read_to_string("wikipedia_graph.json")?;
     let graph: serde_json::Value = serde_json::from_str(&graph_data)?;
-    
+
     let mut analytics = Analytics::new();
     if let Some(edges) = graph["edges"].as_array() {
         let edges: Vec<(String, String)> = edges
@@ -84,22 +110,27 @@ async fn main() -> Result<()> {
                 }
             })
             .collect();
-        
+
         println!("Loaded {} edges for PageRank calculation", edges.len());
         analytics.load_from_edges(edges);
-        
+
         match analytics.calculate_pagerank() {
             Ok(results) => {
-                println!("PageRank calculation completed in {} iterations (converged: {})", 
-                    results.iterations, results.converged);
-                
+                println!(
+                    "PageRank calculation completed in {} iterations (converged: {})",
+                    results.iterations, results.converged
+                );
+
                 // Sort pages by PageRank score
                 let mut pages: Vec<_> = results.scores.into_iter().collect();
                 pages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-                
+
                 println!("\nTop 10 most important pages:");
                 for (i, (page, score)) in pages.iter().take(10).enumerate() {
-                    let title = page.split('/').last().unwrap_or(page)
+                    let title = page
+                        .split('/')
+                        .last()
+                        .unwrap_or(page)
                         .replace('_', " ")
                         .replace("%20", " ");
                     println!("{}. {} (score: {:.6})", i + 1, title, score);
@@ -112,10 +143,10 @@ async fn main() -> Result<()> {
     // Initialize pathfinder
     println!("\nInitializing Wikipedia path finder...");
     let pathfinder = PathFinder::load_from_json("wikipedia_graph.json")?;
-    
+
     // Analyze graph connectivity
     pathfinder.analyze_connectivity();
-    
+
     println!("\nCalculating average path length...");
     match pathfinder.calculate_average_path_length() {
         Ok(avg) => println!("Average distance between pages: {:.2} links", avg),
@@ -126,12 +157,12 @@ async fn main() -> Result<()> {
     println!("\n=== Wikipedia Path Finder ===");
     println!("Find the shortest path between any two Wikipedia pages in our graph.");
     println!("Here are some available pages in the graph:");
-    
+
     // Show a sample of available pages
     for page in pathfinder.get_page_sample(10) {
         println!("- {}", page);
     }
-    
+
     println!("\nPress Ctrl+C to exit or 'l' to list more pages.");
 
     loop {
@@ -140,11 +171,11 @@ async fn main() -> Result<()> {
         let mut start = String::new();
         io::stdin().read_line(&mut start)?;
         let start = start.trim();
-        
+
         if start.eq_ignore_ascii_case("q") {
             break;
         }
-        
+
         if start.eq_ignore_ascii_case("l") {
             println!("\nHere are 20 more pages from the graph:");
             for page in pathfinder.get_page_sample(20) {
@@ -164,7 +195,10 @@ async fn main() -> Result<()> {
                 println!("\nPath found ({} steps):", path.len() - 1);
                 for (i, url) in path.iter().enumerate() {
                     // Extract page title from URL for better readability
-                    let title = url.split('/').last().unwrap_or(url)
+                    let title = url
+                        .split('/')
+                        .last()
+                        .unwrap_or(url)
                         .replace('_', " ")
                         .replace("%20", " ");
                     println!("{}. {}", i + 1, title);
@@ -173,6 +207,6 @@ async fn main() -> Result<()> {
             Err(e) => println!("Error: {}", e),
         }
     }
-    
+
     Ok(())
 }

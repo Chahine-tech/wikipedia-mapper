@@ -1,17 +1,17 @@
+use crate::graph::GraphExporter;
 use crate::stats::CrawlStats;
 use crate::utils::fetch_page;
-use crate::graph::GraphExporter;
-use crossbeam::queue::SegQueue;
-use scraper::{Html, Selector};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::time::Duration;
-use std::collections::{HashSet, HashMap};
 use anyhow::Result;
+use crossbeam::queue::SegQueue;
 use futures::future::join_all;
-use tokio::time::sleep;
-use regex::Regex;
 use lazy_static::lazy_static;
+use regex::Regex;
+use scraper::{Html, Selector};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
+use tokio::time::sleep;
 
 const MAX_DEPTH: usize = 3;
 const RATE_LIMIT: u64 = 200;
@@ -93,13 +93,20 @@ impl URLFilter {
         };
 
         // Check if domain is allowed
-        if !self.allowed_domains.contains(url_parsed.host_str().unwrap_or("")) {
+        if !self
+            .allowed_domains
+            .contains(url_parsed.host_str().unwrap_or(""))
+        {
             return false;
         }
 
         // Check path prefixes
         let path = url_parsed.path();
-        if !self.path_prefixes.iter().any(|prefix| path.starts_with(prefix)) {
+        if !self
+            .path_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        {
             return false;
         }
 
@@ -121,7 +128,8 @@ impl URLFilter {
     }
 
     fn add_custom_rule(&mut self, name: &str, rule: Box<dyn Fn(&str) -> bool + Send + Sync>) {
-        self.custom_rules.insert(name.to_string(), DebugFn::new(rule));
+        self.custom_rules
+            .insert(name.to_string(), DebugFn::new(rule));
     }
 }
 
@@ -172,7 +180,7 @@ impl Crawler {
 
     pub async fn get_state(&self) -> Result<crate::state::CrawlState> {
         let visited_guard = self.visited.read().await;
-        
+
         let mut queue_vec = vec![];
         while let Some(item) = self.queue.pop() {
             queue_vec.push(item);
@@ -202,7 +210,7 @@ impl Crawler {
             "a[href^='/wiki/']",
             "#mw-content-text a[href^='/wiki/']",
             ".mw-parser-output a[href^='/wiki/']",
-            "div.mw-parser-output a[href^='/wiki/']"
+            "div.mw-parser-output a[href^='/wiki/']",
         ];
 
         let mut new_urls = Vec::new();
@@ -215,7 +223,7 @@ impl Crawler {
                     if let Some(href) = element.value().attr("href") {
                         let href = href.to_string();
                         let full_url = format!("https://en.wikipedia.org{}", href);
-                        
+
                         if url_filter.is_valid_url(&full_url) {
                             new_urls.push(full_url);
                             links_followed += 1;
@@ -293,7 +301,7 @@ impl Crawler {
                 let visited_guard = visited.read().await;
                 !visited_guard.contains(&new_url)
             };
-            
+
             if is_new {
                 new_links.push(new_url);
             }
@@ -314,7 +322,7 @@ impl Crawler {
             stats_guard.links_followed += page_links.links_followed;
             stats_guard.links_ignored += page_links.links_ignored;
         }
-        
+
         Ok(())
     }
 
@@ -335,7 +343,8 @@ impl Crawler {
                 &self.url_filter,
                 url.clone(),
                 depth,
-            ).await?;
+            )
+            .await?;
         }
 
         for _worker_id in 0..NUM_CONCURRENT_REQUESTS {
@@ -370,7 +379,8 @@ impl Crawler {
                         &url_filter_clone,
                         current_url.clone(),
                         depth,
-                    ).await;
+                    )
+                    .await;
 
                     if let Err(e) = result {
                         eprintln!("Failed to process {}: {}", current_url, e);
@@ -397,9 +407,12 @@ impl Crawler {
         Ok(())
     }
 
-    pub async fn add_custom_url_rule(&self, name: &str, rule: Box<dyn Fn(&str) -> bool + Send + Sync>) {
+    pub async fn add_custom_url_rule(
+        &self,
+        name: &str,
+        rule: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    ) {
         let mut filter = self.url_filter.write().await;
         filter.add_custom_rule(name, rule);
     }
 }
-

@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct PathFinder {
     // Stores links between pages (source page -> destination pages)
@@ -39,7 +39,7 @@ impl PathFinder {
             .entry(from.clone())
             .or_insert_with(Vec::new)
             .push(to.clone());
-        
+
         // Add to -> from edge (make it bidirectional)
         self.adjacency_list
             .entry(to)
@@ -109,9 +109,11 @@ impl PathFinder {
     pub fn calculate_average_path_length(&self) -> Result<f64> {
         let nodes: Vec<&String> = self.adjacency_list.keys().collect();
         let n = nodes.len();
-        
+
         if n <= 1 {
-            return Err(anyhow!("Graph has too few nodes to calculate average distance"));
+            return Err(anyhow!(
+                "Graph has too few nodes to calculate average distance"
+            ));
         }
 
         // Take a random sample of node pairs to calculate average path length
@@ -121,26 +123,36 @@ impl PathFinder {
         let mut paths_found = 0;
         let mut attempts = 0;
 
-        println!("Calculating average path length (sampling {} pairs)...", sample_size);
-        
-        while paths_found < 10 && attempts < sample_size { // Try to find at least 10 valid paths
+        println!(
+            "Calculating average path length (sampling {} pairs)...",
+            sample_size
+        );
+
+        while paths_found < 10 && attempts < sample_size {
+            // Try to find at least 10 valid paths
             let mut indices: Vec<usize> = (0..n).collect();
             indices.shuffle(&mut rng);
             let (i, j) = (indices[0], indices[1]);
-            
+
             attempts += 1;
-            
+
             if let Ok(path) = self.find_shortest_path(nodes[i], nodes[j]) {
                 total_distance += path.len() - 1;
                 paths_found += 1;
             }
         }
-        
+
         if paths_found == 0 {
-            return Err(anyhow!("No paths found between sampled nodes after {} attempts", attempts));
+            return Err(anyhow!(
+                "No paths found between sampled nodes after {} attempts",
+                attempts
+            ));
         }
-        
-        println!("Found {} valid paths out of {} attempts", paths_found, attempts);
+
+        println!(
+            "Found {} valid paths out of {} attempts",
+            paths_found, attempts
+        );
         Ok(total_distance as f64 / paths_found as f64)
     }
 
@@ -148,9 +160,9 @@ impl PathFinder {
     pub fn load_from_json(path: &str) -> Result<Self> {
         let file = std::fs::File::open(path)?;
         let data: serde_json::Value = serde_json::from_reader(file)?;
-        
+
         let mut pathfinder = Self::new();
-        
+
         if let Some(edges) = data["edges"].as_array() {
             for edge in edges {
                 if let (Some(from), Some(to)) = (edge[0].as_str(), edge[1].as_str()) {
@@ -158,7 +170,7 @@ impl PathFinder {
                 }
             }
         }
-        
+
         Ok(pathfinder)
     }
 
@@ -173,11 +185,11 @@ impl PathFinder {
         for (_node, edges) in &self.adjacency_list {
             let edge_count = edges.len();
             total_edges += edge_count;
-            
+
             if edge_count == 0 {
                 nodes_with_no_edges += 1;
             }
-            
+
             max_edges = max_edges.max(edge_count);
             min_edges = min_edges.min(edge_count);
         }
@@ -185,9 +197,12 @@ impl PathFinder {
         println!("\nGraph Analysis:");
         println!("Total nodes: {}", total_nodes);
         println!("Total edges: {}", total_edges);
-        println!("Average edges per node: {:.2}", total_edges as f64 / total_nodes as f64);
+        println!(
+            "Average edges per node: {:.2}",
+            total_edges as f64 / total_nodes as f64
+        );
         println!("Nodes with no edges: {}", nodes_with_no_edges);
         println!("Max edges for a node: {}", max_edges);
         println!("Min edges for a node: {}", min_edges);
     }
-} 
+}

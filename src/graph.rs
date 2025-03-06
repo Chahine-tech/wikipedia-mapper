@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 
@@ -26,9 +26,9 @@ impl GraphExporter {
     pub fn export_dot(&self, path: &str) -> Result<()> {
         let mut output = String::from("digraph wikipedia {\n");
         output.push_str("  // Configuration du graphe\n");
-        output.push_str("  graph [rankdir=LR];\n");  
-        output.push_str("  node [shape=box, style=rounded];\n");  
-        output.push_str("  edge [color=gray50];\n\n"); 
+        output.push_str("  graph [rankdir=LR];\n");
+        output.push_str("  node [shape=box, style=rounded];\n");
+        output.push_str("  edge [color=gray50];\n\n");
 
         // Write nodes
         output.push_str("  // Nœuds\n");
@@ -44,7 +44,7 @@ impl GraphExporter {
         }
 
         output.push_str("}\n");
-        
+
         let mut file = File::create(path)?;
         file.write_all(output.as_bytes())?;
         Ok(())
@@ -60,4 +60,4 @@ impl GraphExporter {
         file.write_all(serde_json::to_string_pretty(&graph_data)?.as_bytes())?;
         Ok(())
     }
-} 
+}
