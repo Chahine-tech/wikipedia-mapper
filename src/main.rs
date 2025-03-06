@@ -23,9 +23,31 @@ async fn main() -> Result<()> {
         crawler.load_state(state).await?;
     }
 
+    // After creating the crawler
+    // Add custom URL filtering rules before starting the crawl
+    crawler.add_custom_url_rule("exclude_years", Box::new(|url| {
+        // Exclude pages that are just years (e.g., /wiki/1999)
+        !url.matches(r"/wiki/\d{4}$").next().is_some()
+    })).await;
+
+    crawler.add_custom_url_rule("exclude_dates", Box::new(|url| {
+        // Exclude pages that are dates (e.g., /wiki/January_1)
+        let months = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"];
+        !months.iter().any(|month| url.contains(&format!("/wiki/{}_", month)))
+    })).await;
+
+    // Start the crawl
     crawler.start_crawl().await?;
 
-    // Save crawl state
+    // Display final statistics
+    let stats = crawler.get_stats().await?;
+    println!("\nCrawl completed!");
+    println!("Pages visited: {}", stats.pages_visited);
+    println!("Links followed: {}", stats.links_followed);
+    println!("Links ignored: {}", stats.links_ignored);
+
+    // Save state for potential resume
     let state = crawler.get_state().await?;
     state::save_state(&state)?;
 

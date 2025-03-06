@@ -6,15 +6,124 @@ use scraper::{Html, Selector};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::time::Duration;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use anyhow::Result;
 use futures::future::join_all;
 use tokio::time::sleep;
+use regex::Regex;
+use lazy_static::lazy_static;
 
 const MAX_DEPTH: usize = 3;
 const RATE_LIMIT: u64 = 200;
 const NUM_CONCURRENT_REQUESTS: usize = 10;
 const MAX_PAGES_PER_WORKER: usize = 10;
+
+lazy_static! {
+    static ref INVALID_PATTERNS: Vec<Regex> = vec![
+        Regex::new(r"Wikipedia:(.*?)").unwrap(),
+        Regex::new(r"Special:(.*?)").unwrap(),
+        Regex::new(r"Talk:(.*?)").unwrap(),
+        Regex::new(r"User:(.*?)").unwrap(),
+        Regex::new(r"File:(.*?)").unwrap(),
+        Regex::new(r"Template:(.*?)").unwrap(),
+        Regex::new(r"Help:(.*?)").unwrap(),
+        Regex::new(r"Category:(.*?)").unwrap(),
+        Regex::new(r"Portal:(.*?)").unwrap(),
+    ];
+}
+
+struct DebugFn(Box<dyn Fn(&str) -> bool + Send + Sync>);
+
+impl DebugFn {
+    fn new(f: Box<dyn Fn(&str) -> bool + Send + Sync>) -> Self {
+        Self(f)
+    }
+
+    fn call(&self, input: &str) -> bool {
+        (self.0)(input)
+    }
+}
+
+impl std::fmt::Debug for URLFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("URLFilter")
+            .field("allowed_domains", &self.allowed_domains)
+            .field("excluded_patterns", &self.excluded_patterns)
+            .field("path_prefixes", &self.path_prefixes)
+            .field("custom_rules_count", &self.custom_rules.len())
+            .finish()
+    }
+}
+
+struct URLFilter {
+    allowed_domains: HashSet<String>,
+    excluded_patterns: Vec<Regex>,
+    path_prefixes: HashSet<String>,
+    custom_rules: HashMap<String, DebugFn>,
+}
+
+impl Default for URLFilter {
+    fn default() -> Self {
+        let mut allowed_domains = HashSet::new();
+        allowed_domains.insert("en.wikipedia.org".to_string());
+
+        let mut path_prefixes = HashSet::new();
+        path_prefixes.insert("/wiki/".to_string());
+
+        Self {
+            allowed_domains,
+            excluded_patterns: INVALID_PATTERNS.to_vec(),
+            path_prefixes,
+            custom_rules: HashMap::new(),
+        }
+    }
+}
+
+impl URLFilter {
+    fn is_valid_url(&self, url: &str) -> bool {
+        // Check if URL contains a fragment
+        if url.contains('#') {
+            return false;
+        }
+
+        // Check domain
+        let url_parsed = match url::Url::parse(url) {
+            Ok(u) => u,
+            Err(_) => return false,
+        };
+
+        // Check if domain is allowed
+        if !self.allowed_domains.contains(url_parsed.host_str().unwrap_or("")) {
+            return false;
+        }
+
+        // Check path prefixes
+        let path = url_parsed.path();
+        if !self.path_prefixes.iter().any(|prefix| path.starts_with(prefix)) {
+            return false;
+        }
+
+        // Check excluded patterns
+        for pattern in &self.excluded_patterns {
+            if pattern.is_match(path) {
+                return false;
+            }
+        }
+
+        // Apply custom rules
+        for rule in self.custom_rules.values() {
+            if !rule.call(url) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn add_custom_rule(&mut self, name: &str, rule: Box<dyn Fn(&str) -> bool + Send + Sync>) {
+        self.custom_rules.insert(name.to_string(), DebugFn::new(rule));
+    }
+}
 
 #[derive(Debug)]
 struct PageLinks {
@@ -28,6 +137,7 @@ pub struct Crawler {
     visited: Arc<RwLock<HashSet<String>>>,
     stats: Arc<RwLock<CrawlStats>>,
     graph: Arc<RwLock<GraphExporter>>,
+    url_filter: Arc<RwLock<URLFilter>>,
 }
 
 impl Crawler {
@@ -36,6 +146,7 @@ impl Crawler {
         let visited = Arc::new(RwLock::new(HashSet::new()));
         let stats = Arc::new(RwLock::new(CrawlStats::new()));
         let graph = Arc::new(RwLock::new(GraphExporter::new()));
+        let url_filter = Arc::new(RwLock::new(URLFilter::default()));
 
         if let Some(url) = start_url {
             queue.push((url, 0));
@@ -46,6 +157,7 @@ impl Crawler {
             visited,
             stats,
             graph,
+            url_filter,
         }
     }
 
@@ -84,7 +196,7 @@ impl Crawler {
         Ok(())
     }
 
-    fn extract_links(content: &str, _base_url: &str) -> PageLinks {
+    fn extract_links(content: &str, url_filter: &URLFilter) -> PageLinks {
         let document = Html::parse_document(content);
         let selectors = [
             "a[href^='/wiki/']",
@@ -102,9 +214,9 @@ impl Crawler {
                 for element in document.select(&link_selector) {
                     if let Some(href) = element.value().attr("href") {
                         let href = href.to_string();
+                        let full_url = format!("https://en.wikipedia.org{}", href);
                         
-                        if !href.contains(":") && !href.contains("#") {
-                            let full_url = format!("https://en.wikipedia.org{}", href);
+                        if url_filter.is_valid_url(&full_url) {
                             new_urls.push(full_url);
                             links_followed += 1;
                         } else {
@@ -127,6 +239,7 @@ impl Crawler {
         visited: &Arc<RwLock<HashSet<String>>>,
         stats: &Arc<RwLock<CrawlStats>>,
         graph: &Arc<RwLock<GraphExporter>>,
+        url_filter: &Arc<RwLock<URLFilter>>,
         url: String,
         depth: usize,
     ) -> Result<()> {
@@ -134,7 +247,15 @@ impl Crawler {
             return Ok(());
         }
 
-        // Vérifier si l'URL a déjà été visitée (lecture seule)
+        // Check if URL is valid
+        {
+            let filter = url_filter.read().await;
+            if !filter.is_valid_url(&url) {
+                return Ok(());
+            }
+        }
+
+        // Check if URL has already been visited (read-only)
         {
             let visited_guard = visited.read().await;
             if visited_guard.contains(&url) {
@@ -142,7 +263,7 @@ impl Crawler {
             }
         }
 
-        // Fetch en dehors des sections verrouillées
+        // Fetch outside of locked sections
         let body = match fetch_page(&url).await {
             Ok(content) => content,
             Err(e) => {
@@ -151,7 +272,7 @@ impl Crawler {
             }
         };
 
-        // Marquer comme visité et mettre à jour les stats (écriture)
+        // Mark as visited and update stats (write)
         {
             let mut visited_guard = visited.write().await;
             if !visited_guard.contains(&url) {
@@ -161,10 +282,11 @@ impl Crawler {
             }
         }
 
-        // Extraire les liens dans le même thread
-        let page_links = Self::extract_links(&body, &url);
+        // Extract links in the same thread
+        let filter = url_filter.read().await;
+        let page_links = Self::extract_links(&body, &filter);
 
-        // Filtrer les URLs déjà visitées
+        // Filter already visited URLs
         let mut new_links = Vec::new();
         for new_url in page_links.new_urls {
             let is_new = {
@@ -177,7 +299,7 @@ impl Crawler {
             }
         }
 
-        // Mettre à jour le graphe
+        // Update the graph
         {
             let mut graph_guard = graph.write().await;
             for new_link in &new_links {
@@ -186,7 +308,7 @@ impl Crawler {
             }
         }
 
-        // Mettre à jour les statistiques
+        // Update statistics
         {
             let mut stats_guard = stats.write().await;
             stats_guard.links_followed += page_links.links_followed;
@@ -210,6 +332,7 @@ impl Crawler {
                 &self.visited,
                 &self.stats,
                 &self.graph,
+                &self.url_filter,
                 url.clone(),
                 depth,
             ).await?;
@@ -220,6 +343,7 @@ impl Crawler {
             let visited_clone = Arc::clone(&self.visited);
             let stats_clone = Arc::clone(&self.stats);
             let graph_clone = Arc::clone(&self.graph);
+            let url_filter_clone = Arc::clone(&self.url_filter);
 
             let task = tokio::spawn(async move {
                 let mut local_visited_count = 0;
@@ -243,6 +367,7 @@ impl Crawler {
                         &visited_clone,
                         &stats_clone,
                         &graph_clone,
+                        &url_filter_clone,
                         current_url.clone(),
                         depth,
                     ).await;
@@ -270,6 +395,11 @@ impl Crawler {
         }
 
         Ok(())
+    }
+
+    pub async fn add_custom_url_rule(&self, name: &str, rule: Box<dyn Fn(&str) -> bool + Send + Sync>) {
+        let mut filter = self.url_filter.write().await;
+        filter.add_custom_rule(name, rule);
     }
 }
 
